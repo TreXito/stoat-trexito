@@ -3,24 +3,20 @@ name: Android CI
 on:
   push:
     branches: [ "dev" ]
+  workflow_dispatch: { }
+
+permissions:
+  contents: write
 
 jobs:
   build:
-    if: ${{ false }} # at the moment this simply wastes our minutes, we will enable it when we have unit tests etc.
-
     runs-on: ubuntu-latest
-
-    env:
-      RVX_SENTRY_DSN: ${{ vars.RVX_SENTRY_DSN }}
-      RVX_ANALYSIS_ENABLED: ${{ vars.RVX_ANALYSIS_ENABLED }}
-      RVX_ANALYSIS_BASEURL: ${{ vars.RVX_ANALYSIS_BASEURL }}
-      RVX_DEBUG_APP_NAME: ${{ vars.RVX_DEBUG_APP_NAME }}
-      RVX_BUILD_FLAVOUR_ID: ${{ vars.RVX_BUILD_FLAVOUR_ID }}
 
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: 'recursive'
+
       - name: set up JDK 21
         uses: actions/setup-java@v4
         with:
@@ -28,9 +24,18 @@ jobs:
           distribution: 'oracle'
           cache: gradle
 
-
       - name: Setup Android SDK
         uses: android-actions/setup-android@v2
+
+      - name: Prepare local build config
+        run: |
+          if [ -n "${{ secrets.GOOGLE_SERVICES_JSON }}" ]; then
+            echo "${{ secrets.GOOGLE_SERVICES_JSON }}" > app/google-services.json
+          else
+            cp app/google-services.json.example app/google-services.json
+          fi
+          cp sentry.properties.example sentry.properties
+          cp stoatbuild.properties.example stoatbuild.properties
 
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
@@ -39,9 +44,21 @@ jobs:
         run: ./gradlew --no-daemon assembleDebug
 
       - name: Archive debug APK
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: debug-apk
           retention-days: 5
           path: |
             app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Publish dev build release
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: dev-latest
+          name: "Dev build ${{ github.run_number }} (${{ github.sha }})"
+          body: |
+            Automatic debug build from the latest merge to `dev` (${{ github.sha }}).
+            This tag is overwritten on every push to `dev`, so the link always points at the newest build.
+          prerelease: true
+          files: app/build/outputs/apk/debug/app-debug.apk
